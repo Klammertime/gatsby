@@ -10,9 +10,10 @@ export function markWebpackStatusAsPending(): void {
   isPendingStatus = true
 }
 
-export function markWebpackStatusAsDone(): void {
+export async function markWebpackStatusAsDone(): Promise<void> {
   isPendingStatus = false
+
   if (isFlushEnqueued()) {
-    flush()
+    await flush()
   }
 }

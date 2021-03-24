@@ -163,7 +163,7 @@ module.exports = async function build(program: IBuildArgs): Promise<void> {
   }
 
   await flushPendingPageDataWrites()
-  markWebpackStatusAsDone()
+  await markWebpackStatusAsDone()
 
   if (telemetry.isTrackingEnabled()) {
     // transform asset size to kB (from bytes) to fit 64 bit to numbers

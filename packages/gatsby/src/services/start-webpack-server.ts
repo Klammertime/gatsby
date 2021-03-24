@@ -126,7 +126,7 @@ export async function startWebpackServer({
         webpackActivity = null
       }
 
-      markWebpackStatusAsDone()
+      await markWebpackStatusAsDone()
       done()
       emitter.emit(`COMPILATION_DONE`, stats)
       resolve({ compiler, websocketManager, webpackWatching })

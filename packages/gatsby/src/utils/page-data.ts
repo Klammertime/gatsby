@@ -1,7 +1,7 @@
 import { walkStream as fsWalkStream, Entry } from "@nodelib/fs.walk"
 import fs from "fs-extra"
 import reporter from "gatsby-cli/lib/reporter"
-import fastq from "fastq"
+import * as fastq from "fastq"
 import path from "path"
 import { createContentDigest } from "gatsby-core-utils"
 import { IGatsbyPage } from "../redux/types"
@@ -138,76 +138,78 @@ export async function flush(): Promise<void> {
 
   const pagesToWrite = pagePaths.values()
 
-  const flushQueue = fastq(async (pagePath, cb) => {
-    const page = pages.get(pagePath)
+  const flushQueue = fastq.promise<undefined, string, boolean>(
+    async pagePath => {
+      const page = pages.get(pagePath)
 
-    // It's a gloomy day in Bombay, let me tell you a short story...
-    // Once upon a time, writing page-data.json files were atomic
-    // After this change (#24808), they are not and this means that
-    // between adding a pending write for a page and actually flushing
-    // them, a page might not exist anymore щ（ﾟДﾟщ）
-    // This is why we need this check
-    if (page) {
-      if (
-        program?._?.[0] === `develop` &&
-        process.env.GATSBY_EXPERIMENTAL_QUERY_ON_DEMAND
-      ) {
-        // check if already did run query for this page
-        // with query-on-demand we might have pending page-data write due to
-        // changes in static queries assigned to page template, but we might not
-        // have query result for it
-        const query = queries.trackedQueries.get(page.path)
-        if (!query) {
-          // this should not happen ever
-          throw new Error(
-            `We have a page, but we don't have registered query for it (???)`
-          )
+      // It's a gloomy day in Bombay, let me tell you a short story...
+      // Once upon a time, writing page-data.json files were atomic
+      // After this change (#24808), they are not and this means that
+      // between adding a pending write for a page and actually flushing
+      // them, a page might not exist anymore щ（ﾟДﾟщ）
+      // This is why we need this check
+      if (page) {
+        if (
+          process.env.gatsby_executing_command === `develop` &&
+          process.env.GATSBY_EXPERIMENTAL_QUERY_ON_DEMAND
+        ) {
+          // check if already did run query for this page
+          // with query-on-demand we might have pending page-data write due to
+          // changes in static queries assigned to page template, but we might not
+          // have query result for it
+          const query = queries.trackedQueries.get(page.path)
+          if (!query) {
+            // this should not happen ever
+            throw new Error(
+              `We have a page, but we don't have registered query for it (???)`
+            )
+          }
+
+          if (hasFlag(query.dirty, FLAG_DIRTY_NEW_PAGE)) {
+            // query results are not written yet
+            return true
+          }
         }
 
-        if (hasFlag(query.dirty, FLAG_DIRTY_NEW_PAGE)) {
-          // query results are not written yet
-          return cb(null, true)
+        const staticQueryHashes =
+          staticQueriesByTemplate.get(page.componentPath) || []
+
+        const result = await writePageData(
+          path.join(program.directory, `public`),
+          {
+            ...page,
+            staticQueryHashes,
+          }
+        )
+
+        if (process.env.gatsby_executing_command === `develop`) {
+          websocketManager.emitPageData({
+            id: pagePath,
+            result,
+          })
         }
       }
 
-      const staticQueryHashes =
-        staticQueriesByTemplate.get(page.componentPath) || []
+      store.dispatch({
+        type: `CLEAR_PENDING_PAGE_DATA_WRITE`,
+        payload: {
+          page: pagePath,
+        },
+      })
 
-      const result = await writePageData(
-        path.join(program.directory, `public`),
-        {
-          ...page,
-          staticQueryHashes,
-        }
-      )
+      return true
+    },
+    25
+  )
 
-      if (program?._?.[0] === `develop`) {
-        websocketManager.emitPageData({
-          id: pagePath,
-          result,
-        })
-      }
-    }
-
-    store.dispatch({
-      type: `CLEAR_PENDING_PAGE_DATA_WRITE`,
-      payload: {
-        page: pagePath,
-      },
-    })
-
-    return cb(null, true)
-  }, 25)
-
+  // The best way to wait until fastQ is done is by awaiting all promises
+  // drain and idle can be called when the queue is empty, this can happen when the cpu is under pressure.
+  const promisesUntilComplete: Array<Promise<boolean>> = []
   for (const pagePath of pagesToWrite) {
-    flushQueue.push(pagePath, () => {})
+    promisesUntilComplete.push(flushQueue.push(pagePath))
   }
 
-  if (!flushQueue.idle()) {
-    await new Promise(resolve => {
-      flushQueue.drain = resolve as () => unknown
-    })
-  }
+  await Promise.all(promisesUntilComplete)
 
   isFlushing = false
   return
